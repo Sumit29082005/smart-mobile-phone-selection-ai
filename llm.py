@@ -5,7 +5,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 # ============================================================
-# Gemini API Key
+# GEMINI API KEY
 # ============================================================
 
 try:
@@ -15,48 +15,27 @@ except Exception:
 
 
 # ============================================================
-# Gemini Model
+# GEMINI MODEL
 # ============================================================
 
-if not API_KEY:
-    raise ValueError(
-        "GEMINI_API_KEY is missing. "
-        "Please add GEMINI_API_KEY in Streamlit Secrets."
+if API_KEY:
+
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-3.6-flash",
+        api_key=API_KEY,
+        temperature=0
     )
 
-
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    api_key=API_KEY,
-    temperature=0
-)
+else:
+    llm = None
 
 
 # ============================================================
-# Extract smartphone requirements
+# DEFAULT REQUIREMENTS
 # ============================================================
 
-def extract_requirements(user_input):
-    """
-    Convert user's natural language phone requirements
-    into structured JSON data.
-    """
-
-    prompt = f"""
-You are a smartphone recommendation assistant.
-
-The user will describe the smartphone they want.
-
-Extract the important requirements from the user's message.
-
-Return ONLY valid JSON.
-Do not add markdown.
-Do not add ```.
-
-Use exactly these fields:
-
-{{
-    "budget": null,
+DEFAULT_REQUIREMENTS = {
+    "budget": None,
     "gaming": 0,
     "camera": 0,
     "battery": 0,
@@ -66,169 +45,122 @@ Use exactly these fields:
     "ram": 0,
     "brand": "",
     "os": ""
+}
+
+
+# ============================================================
+# EXTRACT REQUIREMENTS
+# ============================================================
+
+def extract_requirements(user_input):
+
+    if not user_input or not user_input.strip():
+        return DEFAULT_REQUIREMENTS.copy()
+
+    if llm is None:
+        st.error("Gemini API key is missing. Please add GEMINI_API_KEY in Streamlit Secrets.")
+        return DEFAULT_REQUIREMENTS.copy()
+
+    prompt = f"""
+You are a smartphone requirement extraction AI.
+
+Read the user's smartphone requirement and convert it into JSON.
+
+User requirement:
+{user_input}
+
+Return ONLY valid JSON.
+
+Use exactly these fields:
+
+{{
+    "budget": number or null,
+    "gaming": number from 0 to 10,
+    "camera": number from 0 to 10,
+    "battery": number from 0 to 10,
+    "performance": number from 0 to 10,
+    "display": number from 0 to 10,
+    "storage": number from 0 to 10,
+    "ram": number from 0 to 10,
+    "brand": string,
+    "os": string
 }}
 
 Rules:
 
-1. budget:
-   - Extract the maximum budget in Indian Rupees.
-   - Example: "under 30000" -> 30000
-   - Example: "budget is 25k" -> 25000
-   - If budget is not mentioned -> null
+1. If budget is mentioned, extract the maximum budget as a number.
+2. If gaming is important, give gaming a value between 1 and 10.
+3. If camera is important, give camera a value between 1 and 10.
+4. If battery is important, give battery a value between 1 and 10.
+5. If performance is important, give performance a value between 1 and 10.
+6. If display is important, give display a value between 1 and 10.
+7. If storage is mentioned, extract the storage requirement.
+8. If RAM is mentioned, extract the RAM requirement.
+9. If brand is mentioned, extract it.
+10. If Android or iOS is mentioned, extract it.
+11. If something is not mentioned, use 0 for numerical preference fields.
+12. If budget is not mentioned, use null.
+13. Do not write explanations.
+14. Return JSON only.
 
-2. gaming:
-   - 1 if user wants gaming/gaming performance
-   - otherwise 0
+Example:
 
-3. camera:
-   - 1 if user wants a good camera/camera quality
-   - otherwise 0
-
-4. battery:
-   - 1 if user wants good battery/battery life
-   - otherwise 0
-
-5. performance:
-   - 1 if user wants fast performance/processor/performance
-   - otherwise 0
-
-6. display:
-   - 1 if user specifically wants a good display, AMOLED, high refresh rate, etc.
-   - otherwise 0
-
-7. storage:
-   - 1 if user wants more storage/ROM
-   - otherwise 0
-
-8. ram:
-   - 1 if user specifically wants more RAM
-   - otherwise 0
-
-9. brand:
-   - Extract a mentioned brand.
-   - Example: Samsung, Apple, OnePlus
-   - If not mentioned -> ""
-
-10. os:
-   - Extract Android or iOS if mentioned.
-   - If not mentioned -> ""
-
-User message:
-
-{user_input}
+{{
+    "budget": 30000,
+    "gaming": 9,
+    "camera": 8,
+    "battery": 8,
+    "performance": 9,
+    "display": 7,
+    "storage": 8,
+    "ram": 8,
+    "brand": "",
+    "os": "Android"
+}}
 """
 
     try:
 
         response = llm.invoke(prompt)
 
+        # Get text from Gemini response
         result = response.content
 
-        # ----------------------------------------------------
-        # Sometimes Gemini returns ```json ... ```
-        # Remove markdown if present
-        # ----------------------------------------------------
+        if isinstance(result, list):
+            result = " ".join(
+                item.get("text", "")
+                if isinstance(item, dict)
+                else str(item)
+                for item in result
+            )
 
+        result = str(result).strip()
+
+        # Remove markdown JSON fences if Gemini returns them
+        result = re.sub(r"```json", "", result, flags=re.IGNORECASE)
+        result = re.sub(r"```", "", result)
         result = result.strip()
 
-        result = re.sub(
-            r"^```json\s*",
-            "",
-            result,
-            flags=re.IGNORECASE
-        )
+        # Find JSON object
+        match = re.search(r"\{.*\}", result, re.DOTALL)
 
-        result = re.sub(
-            r"^```\s*",
-            "",
-            result
-        )
+        if match:
+            result = match.group(0)
 
-        result = re.sub(
-            r"\s*```$",
-            "",
-            result
-        )
+        requirements = json.loads(result)
 
-        result = result.strip()
+        # Make sure all expected keys exist
+        final_requirements = DEFAULT_REQUIREMENTS.copy()
 
-        # ----------------------------------------------------
-        # Convert JSON text into Python dictionary
-        # ----------------------------------------------------
+        for key in final_requirements:
 
-        data = json.loads(result)
+            if key in requirements:
+                final_requirements[key] = requirements[key]
 
-        # ----------------------------------------------------
-        # Make sure all expected fields exist
-        # ----------------------------------------------------
-
-        requirements = {
-            "budget": data.get("budget"),
-            "gaming": data.get("gaming", 0),
-            "camera": data.get("camera", 0),
-            "battery": data.get("battery", 0),
-            "performance": data.get("performance", 0),
-            "display": data.get("display", 0),
-            "storage": data.get("storage", 0),
-            "ram": data.get("ram", 0),
-            "brand": data.get("brand", ""),
-            "os": data.get("os", "")
-        }
-
-        return requirements
-
-    except json.JSONDecodeError:
-
-        # If Gemini returns something that isn't perfect JSON,
-        # return safe default values.
-
-        return {
-            "budget": None,
-            "gaming": 0,
-            "camera": 0,
-            "battery": 0,
-            "performance": 0,
-            "display": 0,
-            "storage": 0,
-            "ram": 0,
-            "brand": "",
-            "os": ""
-        }
+        return final_requirements
 
     except Exception as e:
 
-        # Show error in Streamlit without exposing API key
-        st.error(f"Gemini error: {str(e)}")
+        st.error(f"Gemini error: {e}")
 
-        return {
-            "budget": None,
-            "gaming": 0,
-            "camera": 0,
-            "battery": 0,
-            "performance": 0,
-            "display": 0,
-            "storage": 0,
-            "ram": 0,
-            "brand": "",
-            "os": ""
-        }
-
-
-# ============================================================
-# Local testing
-# ============================================================
-
-if __name__ == "__main__":
-
-    test_input = (
-        "I have a budget of 30000 rupees. "
-        "I want a phone mainly for gaming and camera "
-        "with good battery."
-    )
-
-    print("Testing Gemini...")
-
-    result = extract_requirements(test_input)
-
-    print("\nExtracted requirements:")
-    print(json.dumps(result, indent=4))
+        return DEFAULT_REQUIREMENTS.copy()
