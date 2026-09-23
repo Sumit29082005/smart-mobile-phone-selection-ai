@@ -6,4 +6,4 @@ scikit-fuzzy
 networkx
 langchain
 langchain-google-genai
-python-dotenvgit 
+python-dotenv
