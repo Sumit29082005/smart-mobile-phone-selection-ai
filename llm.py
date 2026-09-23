@@ -1,184 +1,234 @@
-import os
-from dotenv import load_dotenv
-
+import json
+import re
+import streamlit as st
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
 
 
-load_dotenv()
+# ============================================================
+# Gemini API Key
+# ============================================================
+
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    API_KEY = None
 
 
-# Gemini model
+# ============================================================
+# Gemini Model
+# ============================================================
+
+if not API_KEY:
+    raise ValueError(
+        "GEMINI_API_KEY is missing. "
+        "Please add GEMINI_API_KEY in Streamlit Secrets."
+    )
+
+
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash"
+    model="gemini-2.5-flash",
+    api_key=API_KEY,
+    temperature=0
 )
 
 
-# -------------------------------------------------
-# Requirement Extraction
-# -------------------------------------------------
-
-requirement_prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        """
-You are a smartphone requirement extraction assistant.
-
-Read the user's smartphone requirements and extract:
-
-1. Budget
-2. Camera preference
-3. Gaming preference
-4. Battery preference
-5. Performance preference
-
-Return the answer in exactly this format:
-
-Budget: <amount>
-Camera: <low/medium/high>
-Gaming: <low/medium/high>
-Battery: <low/medium/high>
-Performance: <low/medium/high>
-
-If something is not mentioned, write:
-Not specified.
-"""
-    ),
-    (
-        "human",
-        "{user_input}"
-    )
-])
-
-
-requirement_chain = requirement_prompt | llm
-
-
-# -------------------------------------------------
-# Extract requirements
-# -------------------------------------------------
+# ============================================================
+# Extract smartphone requirements
+# ============================================================
 
 def extract_requirements(user_input):
+    """
+    Convert user's natural language phone requirements
+    into structured JSON data.
+    """
 
-    response = requirement_chain.invoke({
-        "user_input": user_input
-    })
+    prompt = f"""
+You are a smartphone recommendation assistant.
 
+The user will describe the smartphone they want.
 
-    if isinstance(response.content, list):
+Extract the important requirements from the user's message.
 
-        for item in response.content:
+Return ONLY valid JSON.
+Do not add markdown.
+Do not add ```.
 
-            if isinstance(item, dict):
+Use exactly these fields:
 
-                if item.get("type") == "text":
+{{
+    "budget": null,
+    "gaming": 0,
+    "camera": 0,
+    "battery": 0,
+    "performance": 0,
+    "display": 0,
+    "storage": 0,
+    "ram": 0,
+    "brand": "",
+    "os": ""
+}}
 
-                    return item.get("text", "")
+Rules:
 
-    else:
+1. budget:
+   - Extract the maximum budget in Indian Rupees.
+   - Example: "under 30000" -> 30000
+   - Example: "budget is 25k" -> 25000
+   - If budget is not mentioned -> null
 
-        return response.content
+2. gaming:
+   - 1 if user wants gaming/gaming performance
+   - otherwise 0
 
+3. camera:
+   - 1 if user wants a good camera/camera quality
+   - otherwise 0
 
-    return ""
+4. battery:
+   - 1 if user wants good battery/battery life
+   - otherwise 0
 
+5. performance:
+   - 1 if user wants fast performance/processor/performance
+   - otherwise 0
 
-# -------------------------------------------------
-# AI Recommendation Explanation
-# -------------------------------------------------
+6. display:
+   - 1 if user specifically wants a good display, AMOLED, high refresh rate, etc.
+   - otherwise 0
 
-explanation_prompt = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        """
-You are an AI smartphone recommendation assistant.
+7. storage:
+   - 1 if user wants more storage/ROM
+   - otherwise 0
 
-Explain why the recommended smartphones are suitable
-for the user's requirements.
+8. ram:
+   - 1 if user specifically wants more RAM
+   - otherwise 0
 
-Use the user's requirements, phone specifications,
-and fuzzy suitability scores provided to you.
+9. brand:
+   - Extract a mentioned brand.
+   - Example: Samsung, Apple, OnePlus
+   - If not mentioned -> ""
 
-Your explanation should:
+10. os:
+   - Extract Android or iOS if mentioned.
+   - If not mentioned -> ""
 
-1. Mention the user's main requirements.
-2. Explain why each recommended phone matches.
-3. Mention important strengths such as camera,
-   gaming, battery, performance and price.
-4. Mention the fuzzy suitability score.
-5. Clearly explain if a phone is above the user's budget.
-6. Do not invent specifications that are not provided.
-7. Keep the explanation simple and easy to understand.
+User message:
 
-Do not say that one phone is universally the best.
-Explain the recommendations based on the user's
-specific requirements.
-
-Use this format:
-
-AI Recommendation Explanation
-
-User Requirements:
-<short summary>
-
-1. <Phone Name>
-<2-3 sentences explaining why it matches>
-
-2. <Phone Name>
-<2-3 sentences explaining why it matches>
-
-3. <Phone Name>
-<2-3 sentences explaining why it matches>
-
-Final Summary:
-<short overall explanation>
+{user_input}
 """
-    ),
-    (
-        "human",
-        """
-User requirements:
 
-{requirements}
+    try:
 
-Recommended phones:
+        response = llm.invoke(prompt)
 
-{phones}
-"""
+        result = response.content
+
+        # ----------------------------------------------------
+        # Sometimes Gemini returns ```json ... ```
+        # Remove markdown if present
+        # ----------------------------------------------------
+
+        result = result.strip()
+
+        result = re.sub(
+            r"^```json\s*",
+            "",
+            result,
+            flags=re.IGNORECASE
+        )
+
+        result = re.sub(
+            r"^```\s*",
+            "",
+            result
+        )
+
+        result = re.sub(
+            r"\s*```$",
+            "",
+            result
+        )
+
+        result = result.strip()
+
+        # ----------------------------------------------------
+        # Convert JSON text into Python dictionary
+        # ----------------------------------------------------
+
+        data = json.loads(result)
+
+        # ----------------------------------------------------
+        # Make sure all expected fields exist
+        # ----------------------------------------------------
+
+        requirements = {
+            "budget": data.get("budget"),
+            "gaming": data.get("gaming", 0),
+            "camera": data.get("camera", 0),
+            "battery": data.get("battery", 0),
+            "performance": data.get("performance", 0),
+            "display": data.get("display", 0),
+            "storage": data.get("storage", 0),
+            "ram": data.get("ram", 0),
+            "brand": data.get("brand", ""),
+            "os": data.get("os", "")
+        }
+
+        return requirements
+
+    except json.JSONDecodeError:
+
+        # If Gemini returns something that isn't perfect JSON,
+        # return safe default values.
+
+        return {
+            "budget": None,
+            "gaming": 0,
+            "camera": 0,
+            "battery": 0,
+            "performance": 0,
+            "display": 0,
+            "storage": 0,
+            "ram": 0,
+            "brand": "",
+            "os": ""
+        }
+
+    except Exception as e:
+
+        # Show error in Streamlit without exposing API key
+        st.error(f"Gemini error: {str(e)}")
+
+        return {
+            "budget": None,
+            "gaming": 0,
+            "camera": 0,
+            "battery": 0,
+            "performance": 0,
+            "display": 0,
+            "storage": 0,
+            "ram": 0,
+            "brand": "",
+            "os": ""
+        }
+
+
+# ============================================================
+# Local testing
+# ============================================================
+
+if __name__ == "__main__":
+
+    test_input = (
+        "I have a budget of 30000 rupees. "
+        "I want a phone mainly for gaming and camera "
+        "with good battery."
     )
-])
 
+    print("Testing Gemini...")
 
-explanation_chain = explanation_prompt | llm
+    result = extract_requirements(test_input)
 
-
-# -------------------------------------------------
-# Generate AI explanation
-# -------------------------------------------------
-
-def generate_explanation(requirements, phones):
-
-    response = explanation_chain.invoke({
-        "requirements": requirements,
-        "phones": phones
-    })
-
-
-    if isinstance(response.content, list):
-
-        text_parts = []
-
-        for item in response.content:
-
-            if isinstance(item, dict):
-
-                if item.get("type") == "text":
-
-                    text_parts.append(
-                        item.get("text", "")
-                    )
-
-        return "\n".join(text_parts)
-
-
-    return response.content
+    print("\nExtracted requirements:")
+    print(json.dumps(result, indent=4))
